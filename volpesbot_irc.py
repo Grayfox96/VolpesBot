@@ -37,7 +37,7 @@ class irc_bot:
 		# Define the socket
 		self.irc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 		self.handle = self.irc.makefile(mode='rw', buffering=1, encoding='utf-8', newline='\r\n')
-		self.settings = configparser.ConfigParser()
+		self.settings = configparser.ConfigParser(allow_no_value=False, delimiters=("="), comment_prefixes=('#'), empty_lines_in_values=False)
 		self.settings.read("files/irc_bot_settings.ini")
 		self.server = self.settings["DEFAULT"]["server"]
 		self.port = int(self.settings["DEFAULT"]["port"])
@@ -67,6 +67,7 @@ class irc_bot:
 
 		# compile the regex functions
 		self.regex_message = re.compile("^@?(?P<tags>(?:[^\s=;]+=[^\s=;]*[; ])*)(?:\:(?P<nick>[^\!\@ ]+)(?:\!(?P<user>[^\@ ]+))?(?:\@(?P<host>[^ ]+))? )?(?P<cmd>[^ ]+)(?: (?P<channel>[^\:][^ ]*(?: [^\:][^ ]*)*))?(?: \:(?P<msg>.*))?$")
+		self.regex_pinged = re.compile("(?i)(?:\s|\A|\b)(@" + self.bot_nick + ")(?:\s|$|\b)")
 
 		# set an observer for the input box variable
 		self.ui.message_out_var.trace("w", lambda a, b, c: self.send_raw(self.ui.message_out_var.get()))
@@ -82,30 +83,46 @@ class irc_bot:
 		self.send_raw("NICK " + self.bot_nick)
 		self.send_raw("USER " + self.bot_user + " 0 * :" + self.bot_name)
 
-	# accepts a string of channel names separated by commas
-	def join(self, tags, nick, user, host, cmd, channel, msg, data, newchannel=""):
+	# passing a channel makes it connect to it, otherwise connects to all the channel in the settings
+	def join(self, tags, nick, user, host, cmd, channel, msg, data, newchannel=None):
 		# join the channels
-		if newchannel:
-			try:
-				self.settings.add_section(newchannel)
-				self.settings[newchannel]["connect_on_startup"] = "yes"
-				self.send_raw("JOIN " + newchannel)
-			except configparser.DuplicateSectionError:
-				self.send_PRIVMSG(channel, "Already joined channel " + newchannel)
-		else:
+		if newchannel is None:
 			channels = ""
-			for temp_channel in self.settings.sections():
-				if self.settings[temp_channel]["connect_on_startup"] == "yes":
-					self.connected_channels.append(temp_channel)
-					channels = channels + temp_channel + ","
+			for newchannel in self.settings.sections():
+				if self.settings[newchannel]["connect_on_startup"] == "yes":
+					self.connected_channels.append(newchannel)
+					channels = channels + newchannel + ","
 			channels = channels.removesuffix(",")
 			self.send_raw("JOIN " + channels)
+		else:
+			if self.settings.has_section(newchannel):
+				if newchannel in self.connected_channels:
+					return False
+				else:
+					self.settings[newchannel]["connect_on_startup"] = "yes"
+					self.connected_channels.append(newchannel)
+					self.send_raw("JOIN " + newchannel)
+					return True
+			else:
+				self.settings.add_section(newchannel)
+				self.settings[newchannel]["connect_on_startup"] = "yes"
+				self.settings[newchannel]["trigger"] = self.settings["DEFAULT"]["trigger"]
+				self.connected_channels.append(newchannel)
+				self.send_raw("JOIN " + newchannel)
+				return True
 
+
+	# parts a channel
 	def part(self, tags, nick, user, host, cmd, channel, msg, data, removedchannel):
-		self.connected_channels.remove(channel)
-		self.settings[newchannel]["connect_on_startup"] == "no"
-		self.send_raw("PART " + removedchannel)
+		if removedchannel in self.connected_channels:
+			self.connected_channels.remove(removedchannel)
+			self.settings[removedchannel]["connect_on_startup"] = "no"
+			self.send_raw("PART " + removedchannel)
+			return True
+		else:
+			return False
 
+	# outputs to the log
 	def log(self, data):
 		current_time = datetime.datetime.now().strftime("%H:%M:%S")
 		self.chat_log = self.chat_log + current_time + " " + data + "\n"
@@ -117,25 +134,24 @@ class irc_bot:
 			settings_file = open("files/irc_bot_settings.ini", "w")
 			self.settings.write(settings_file)
 			settings_file.close()
-			self.log("Settings saved!")
-
+			print("Settings saved!")
 
 	# send anything to the irc server, accepts a string
 	def send_raw(self, message):
 		self.log(">" + message)
 		print(message, file=self.handle)
 
-	# accepts a channel and some a string to send directly as a privmsg
+	# accepts a channel and a string to send directly as a privmsg
 	def send_PRIVMSG(self, channel, text):
 		message = "PRIVMSG " + channel + " :" + text
 		self.send_raw(message)
 
-	# special "send_raw" case, this way the console doesnt receive the password as plain text
+	# special "send_raw" case, this way the console doesnt output the password as plain text
 	def send_PASS(self, password):
 		self.log(">PASS oauth:******************************")
 		print("PASS", password, file=self.handle)
 
-	# answers to a PING message with an appropriate PONG message
+	# answers to a PING message with a PONG message
 	def on_PING(self, tags, nick, user, host, cmd, channel, msg, data):
 		self.send_raw("PONG :" + msg)
 		# self.save_settings()
@@ -144,21 +160,22 @@ class irc_bot:
 	def on_JOIN(self, tags, nick, user, host, cmd, channel, msg, data):
 		# self.connected_channels.append(channel)
 		# self.send_PRIVMSG("#" + self.bot_nick, "Joined channel: " + channel)
-		return
+		pass
 
 	# sends a message in the bot own channel every time it parts a channel
 	# PART might not be reliable so dont use it for anything important
 	def on_PART(self, tags, nick, user, host, cmd, channel, msg, data):
 		# self.connected_channels.remove(channel)
-		self.send_PRIVMSG("#" + self.bot_nick, "Parted channel: " + channel)
+		# self.send_PRIVMSG("#" + self.bot_nick, "Parted channel: " + channel)
+		pass
 
 	# answers to a 376 message with a join message
 	def on_376(self, tags, nick, user, host, cmd, channel, msg, data):
 		self.join(tags, nick, user, host, cmd, channel, msg, data)
 
 	def on_NOTICE(self, tags, nick, user, host, cmd, channel, msg, data):
-		return
 		# self.send_PRIVMSG(self.bot_nick, data)
+		pass
 
 	def on_PRIVMSG(self, tags, nick, user, host, cmd, channel, msg, data):
 		# create a dictionary for the tags
@@ -170,11 +187,16 @@ class irc_bot:
 		# check if a banned string is in the message
 		if re.search("(?i)" + self.settings[channel]["banned_phrases"], msg) is not None:
 			self.send_PRIVMSG(channel, "/delete " + tags_dict["id"])
+			print("Message deleted from user " + user + ", message content: " + msg)
 			return
+
+		# check if the bot has been pinged
+		if self.regex_pinged.match(msg) is not None:
+			self.send_PRIVMSG(channel, "👋 FeelsDankMan hi " + tags_dict["display-name"] + "! I'm a bot.")
 
 		# create the re.match object to be used in the if statements for the commands
 		command_regex = "(?i)^" + self.settings[channel]["trigger"] + "(?P<command>\S+)(?:\s+(?P<param>.+?))?\s*$"
-		full_command = {"command": "", "param": ""}
+		# full_command = {"command": "", "param": ""}
 		full_command = re.match(command_regex, msg)
 
 		# commands
@@ -187,10 +209,25 @@ class irc_bot:
 					uptime = math.floor(time.time() - self.startup_time)
 					self.send_PRIVMSG(channel, "Uptime: " + str(datetime.timedelta(seconds=uptime)))
 				elif command == "test": self.send_PRIVMSG(channel, "DankG")
-				elif command == "joinchannel": self.join(tags, nick, user, host, cmd, channel, msg, data, newchannel="#" + param.split(" ")[0].lower())
-				elif command == "partchannel": self.part(tags, nick, user, host, cmd, channel, msg, data, removedchannel="#" + param.split(" ")[0].lower())
+				elif command == "joinchannel":
+					newchannel = "#" + param.split()[0].lower()
+					if self.join(tags, nick, user, host, cmd, channel, msg, data, newchannel):
+						self.send_PRIVMSG(channel, "Joined channel " + newchannel)
+					else:
+						self.send_PRIVMSG(channel, "Already joined channel " + newchannel)
+				elif command == "partchannel" or command == "leavechannel":
+					removedchannel = "#" + param.split()[0].lower()
+					if removedchannel == "#" + self.bot_nick:
+						self.send_PRIVMSG(channel, "I can't leave my own channel, if you don't want me to join this chat on startup edit the settings file")
+					elif removedchannel == channel:
+						self.send_PRIVMSG(channel, "If you want me to leave this chat use the command in my chat")
+					else:
+						if self.part(tags, nick, user, host, cmd, channel, msg, data, removedchannel=removedchannel):
+							self.send_PRIVMSG(channel, "Left channel " + removedchannel)
+						else:
+							self.send_PRIVMSG(channel, "I'm not connected to channel " + removedchannel)
 				elif command == "banlist":
-					params_list = param.split(" ", 2)
+					params_list = param.split(maxsplit=2)
 					start = int(params_list[0])
 					limit = int(params_list[1])
 					end = start + limit

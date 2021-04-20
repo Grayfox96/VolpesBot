@@ -22,37 +22,35 @@ volpesbot = irc_bot()
 volpesbot.connect()
 
 # iterate all the lines in the buffer
-while True:
-	for line in volpesbot.handle:
+for line in volpesbot.handle:
 
-		# remove spaces from the end of the string
-		line = line.strip()
+	# remove spaces from the end of the string
+	line = line.strip()
 
-		# log data received
-		volpesbot.log(line)
+	# log data received
+	volpesbot.log(line)
 
-		# divide all the data into appropriate variables
-		matches_tuple = volpesbot.regex_message.match(line)
-		data = line
-		tags = matches_tuple["tags"]
-		nick = matches_tuple["nick"]
-		user = matches_tuple["user"]
-		host = matches_tuple["host"]
-		cmd = matches_tuple["cmd"]
-		channel = matches_tuple["channel"]
-		msg = matches_tuple["msg"]
+	# divide all the data into appropriate variables
+	matches_tuple = volpesbot.regex_message.match(line)
+	data = line
+	tags = matches_tuple["tags"]
+	nick = matches_tuple["nick"]
+	user = matches_tuple["user"]
+	host = matches_tuple["host"]
+	cmd = matches_tuple["cmd"]
+	channel = matches_tuple["channel"]
+	msg = matches_tuple["msg"]
 
-		# call the appropriate function if it exists
-		if hasattr(volpesbot, "on_" + cmd):
-			getattr(volpesbot, "on_" + cmd)(tags, nick, user, host, cmd, channel, msg, data)
+	# call the appropriate function if it exists
+	if hasattr(volpesbot, "on_" + cmd):
+		getattr(volpesbot, "on_" + cmd)(tags, nick, user, host, cmd, channel, msg, data)
 
-		# if the program has been flagged to be closed
-		if volpesbot.ui.quit_var.get():
-			print("Closing script")
-			# save the settings in the settings file
-			volpesbot.save_settings()
-			# close the ui (its running in different thread)
-			volpesbot.ui.root.quit()
-			# close the program
-			quit()
-	print("test")
+	# if the program has been flagged to be closed
+	if volpesbot.ui.quit_var.get():
+		print("Closing script")
+		# save the settings in the settings file
+		volpesbot.save_settings()
+		# close the ui (its running in different thread)
+		volpesbot.ui.root.quit()
+		# close the program
+		quit()
