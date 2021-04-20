@@ -23,52 +23,72 @@ import re
 from volpesbot_ui import *
 
 class irc_bot:
-
-	irc = socket.socket()
-	ui = ui()
-	# wait for the ui thread to complete the startup
-	while not ui.waiting_for_ui.isSet():
-		print("Waiting for UI")
-		ui.waiting_for_ui.wait(2)
-	print("UI open")
-	chat_log = ""
-
 	def __init__(self):
 		# Define the socket
 		self.irc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 		self.handle = self.irc.makefile(mode='rw', buffering=1, encoding='utf-8', newline='\r\n')
-		self.settings = configparser.ConfigParser(allow_no_value=False, delimiters=("="), comment_prefixes=('#'), empty_lines_in_values=False)
-		self.settings.read("files/irc_bot_settings.ini")
-		self.server = self.settings["DEFAULT"]["server"]
-		self.port = int(self.settings["DEFAULT"]["port"])
-		self.bot_nick = self.settings["DEFAULT"]["bot_nick"]
-		self.bot_user = self.settings["DEFAULT"]["bot_user"]
-		self.bot_name = self.settings["DEFAULT"]["bot_name"]
-		self.bot_owner = self.settings["DEFAULT"]["bot_owner"]
-		try:
-			self.bot_password_file = open("files/twitchoauth.txt", "r")
-		except FileNotFoundError:
-			self.bot_password_file = open("files/twitchoauth.txt", "x")
-			self.log("Put your bot oauth in the 'twitchoauth.txt' file in this format: oauth:abcdefghijklmnopqrstuvwxyz1234")
-			exit()
-		self.bot_password = self.bot_password_file.read()
-		self.bot_password_file.close()
-		if re.match("^oauth:\w{30}$", self.bot_password):
-			pass
-		else:
-			self.log("The 'twitchoauth.txt' file must contain the oauth token in the format: oauth:abcdefghijklmnopqrstuvwxyz1234")
-			exit()
 
+		# use
+		self.config = configparser.ConfigParser(allow_no_value=False, delimiters=("="), comment_prefixes=('#'), empty_lines_in_values=False)
+
+		# try opening the settings file, if it doesnt exist create one
+		try:
+			with open("volpesbot_config.ini") as settings_file:
+				self.config.read_file(settings_file)
+		except IOError:
+			# create the default section of the settings
+			self.config.set("DEFAULT", "server", "irc.chat.twitch.tv")
+			self.config.set("DEFAULT", "port", "6667")
+			print("Enter the name of the bot account:")
+			bot_nick_user_name = input().lower()
+			self.config.set("DEFAULT", "bot_nick", bot_nick_user_name)
+			self.config.set("DEFAULT", "bot_user", bot_nick_user_name)
+			self.config.set("DEFAULT", "bot_name", bot_nick_user_name)
+			print("Enter the name of your account (lets the bot know that you have full control over it):")
+			bot_owner = input()
+			self.config.set("DEFAULT", "bot_owner", bot_owner)
+			print("Enter the oauth token for the bot account, it serves as a password, get it from here logging in with the bot account https://twitchapps.com/tmi/")
+			bot_password = input()
+			self.config.set("DEFAULT", "bot_password", bot_password)
+			print("Enter the symbol you want the bot to respond to (for example ! or ?):")
+			trigger = input()
+			self.config.set("DEFAULT", "trigger", trigger)
+			self.config.set("DEFAULT", "verbose_log", "no")
+			# create a section for the bot owner and the bot itself
+			self.config.add_section("#" + bot_nick_user_name)
+			self.config.set("#" + bot_nick_user_name, "connect_on_startup", "yes")
+			self.config.set("#" + bot_nick_user_name, "trigger", self.config.get("DEFAULT", "trigger"))
+			self.config.add_section("#" + bot_owner)
+			self.config.set("#" + bot_owner, "connect_on_startup", "yes")
+			self.config.set("#" + bot_owner, "trigger", self.config.get("DEFAULT", "trigger"))
+			self.save_settings()
+			print("The bot will try to connect to the channels " + bot_nick_user_name + " and " + bot_owner)
+		# making the settings variable names easier to use later
+		self.server = self.config.get("DEFAULT", "server")
+		self.port = self.config.getint("DEFAULT", "port")
+		self.bot_nick = self.config.get("DEFAULT", "bot_nick")
+		self.bot_user = self.config.get("DEFAULT", "bot_user")
+		self.bot_name = self.config.get("DEFAULT", "bot_name")
+		self.bot_owner = self.config.get("DEFAULT", "bot_owner")
+		self.bot_password = self.config.get("DEFAULT", "bot_password")
+
+
+		# create a variable used to store a temporary log
+		self.chat_log = ""
 		# startup time used for uptime and stuff
 		self.startup_time = time.time()
-
 		# initialize the channels list
 		self.connected_channels = []
-
 		# compile the regex functions
 		self.regex_message = re.compile("^@?(?P<tags>(?:[^\s=;]+=[^\s=;]*[; ])*)(?:\:(?P<nick>[^\!\@ ]+)(?:\!(?P<user>[^\@ ]+))?(?:\@(?P<host>[^ ]+))? )?(?P<cmd>[^ ]+)(?: (?P<channel>[^\:][^ ]*(?: [^\:][^ ]*)*))?(?: \:(?P<msg>.*))?$")
 		self.regex_pinged = re.compile("(?i)(?:\s|\A|\b)(@" + self.bot_nick + ")(?:\s|$|\b)")
-
+		# create the ui
+		self.ui = ui()
+		# wait for the ui thread to complete the startup
+		while not self.ui.waiting_for_ui.isSet():
+			print("Waiting for UI")
+			self.ui.waiting_for_ui.wait(2)
+		print("UI open")
 		# set an observer for the input box variable
 		self.ui.message_out_var.trace("w", lambda a, b, c: self.send_raw(self.ui.message_out_var.get()))
 
@@ -84,56 +104,60 @@ class irc_bot:
 		self.send_raw("USER " + self.bot_user + " 0 * :" + self.bot_name)
 
 	# passing a channel makes it connect to it, otherwise connects to all the channel in the settings
-	def join(self, tags, nick, user, host, cmd, channel, msg, data, newchannel=None):
+	def join(self, data, tags, nick, user, host, cmd, channel, msg, newchannel=None):
 		# join the channels
 		if newchannel is None:
 			channels = ""
-			for newchannel in self.settings.sections():
-				if self.settings[newchannel]["connect_on_startup"] == "yes":
+			for newchannel in self.config.sections():
+				if self.config.getboolean(newchannel, "connect_on_startup"):
 					self.connected_channels.append(newchannel)
 					channels = channels + newchannel + ","
 			channels = channels.removesuffix(",")
 			self.send_raw("JOIN " + channels)
 		else:
-			if self.settings.has_section(newchannel):
+			if self.config.has_section(newchannel):
 				if newchannel in self.connected_channels:
 					return False
 				else:
-					self.settings[newchannel]["connect_on_startup"] = "yes"
+					self.config.set(newchannel, "connect_on_startup", "yes")
 					self.connected_channels.append(newchannel)
 					self.send_raw("JOIN " + newchannel)
 					return True
 			else:
-				self.settings.add_section(newchannel)
-				self.settings[newchannel]["connect_on_startup"] = "yes"
-				self.settings[newchannel]["trigger"] = self.settings["DEFAULT"]["trigger"]
+				self.config.add_section(newchannel)
+				self.config.set(newchannel, "connect_on_startup", "yes")
+				self.config.set(newchannel, "trigger", self.config.get("DEFAULT", "trigger"))
 				self.connected_channels.append(newchannel)
 				self.send_raw("JOIN " + newchannel)
 				return True
 
 
 	# parts a channel
-	def part(self, tags, nick, user, host, cmd, channel, msg, data, removedchannel):
+	def part(self, data, tags, nick, user, host, cmd, channel, msg, removedchannel):
 		if removedchannel in self.connected_channels:
 			self.connected_channels.remove(removedchannel)
-			self.settings[removedchannel]["connect_on_startup"] = "no"
+			self.config.set(removedchannel, "connect_on_startup", "no")
 			self.send_raw("PART " + removedchannel)
 			return True
 		else:
 			return False
 
 	# outputs to the log
-	def log(self, data):
+	def log(self, data, tags="", nick="", user="", host="", cmd="", channel="", msg=""):
 		current_time = datetime.datetime.now().strftime("%H:%M:%S")
-		self.chat_log = self.chat_log + current_time + " " + data + "\n"
+		if self.config.getboolean("DEFAULT", "verbose_log"):
+			self.chat_log = f"{self.chat_log} {current_time} {data}\n"
+		elif channel and user and msg:
+			self.chat_log = f"{self.chat_log}{current_time} <{channel}> {user}: {msg}\n"
+		elif cmd == "PRIVMSG":
+			self.chat_log = f"{self.chat_log}{current_time} {data}\n"
 		self.ui.chat_log_text.set(self.chat_log.removesuffix("\n"))
 		# print(data)
 
 	# saves the setting in the settings file
 	def save_settings(self):
-			settings_file = open("files/irc_bot_settings.ini", "w")
-			self.settings.write(settings_file)
-			settings_file.close()
+			with open("volpesbot_config.ini", "w") as settings_file:
+				self.config.write(settings_file)
 			print("Settings saved!")
 
 	# send anything to the irc server, accepts a string
@@ -152,50 +176,52 @@ class irc_bot:
 		print("PASS", password, file=self.handle)
 
 	# answers to a PING message with a PONG message
-	def on_PING(self, tags, nick, user, host, cmd, channel, msg, data):
+	def on_PING(self, data, tags, nick, user, host, cmd, channel, msg):
 		self.send_raw("PONG :" + msg)
 		# self.save_settings()
 
 	# JOIN is not reliable so dont use it
-	def on_JOIN(self, tags, nick, user, host, cmd, channel, msg, data):
+	def on_JOIN(self, data, tags, nick, user, host, cmd, channel, msg):
 		# self.connected_channels.append(channel)
 		# self.send_PRIVMSG("#" + self.bot_nick, "Joined channel: " + channel)
 		pass
 
 	# sends a message in the bot own channel every time it parts a channel
 	# PART might not be reliable so dont use it for anything important
-	def on_PART(self, tags, nick, user, host, cmd, channel, msg, data):
+	def on_PART(self, data, tags, nick, user, host, cmd, channel, msg):
 		# self.connected_channels.remove(channel)
 		# self.send_PRIVMSG("#" + self.bot_nick, "Parted channel: " + channel)
 		pass
 
 	# answers to a 376 message with a join message
-	def on_376(self, tags, nick, user, host, cmd, channel, msg, data):
-		self.join(tags, nick, user, host, cmd, channel, msg, data)
+	def on_376(self, data, tags, nick, user, host, cmd, channel, msg):
+		self.join(data, tags, nick, user, host, cmd, channel, msg)
 
-	def on_NOTICE(self, tags, nick, user, host, cmd, channel, msg, data):
+	def on_NOTICE(self, data, tags, nick, user, host, cmd, channel, msg):
 		# self.send_PRIVMSG(self.bot_nick, data)
 		pass
 
-	def on_PRIVMSG(self, tags, nick, user, host, cmd, channel, msg, data):
+	def on_PRIVMSG(self, data, tags, nick, user, host, cmd, channel, msg):
 		# create a dictionary for the tags
 		tags_dict = {}
 		for tag in tags.split(";"):
 			tag_split = tag.split("=")
 			tags_dict[tag_split[0]] = tag_split[1]
 
-		# check if a banned string is in the message
-		if re.search("(?i)" + self.settings[channel]["banned_phrases"], msg) is not None:
-			self.send_PRIVMSG(channel, "/delete " + tags_dict["id"])
-			print("Message deleted from user " + user + ", message content: " + msg)
-			return
+		# check if the bot is setup to delete messages
+		if self.config.has_option(channel, "banned_phrases"):
+			# check if a banned string is in the message
+			if re.search("(?i)" + self.config.get(channel, "banned_phrases"), msg) is not None:
+				self.send_PRIVMSG(channel, "/delete " + tags_dict["id"])
+				print("Message deleted from user " + user + ", message content: " + msg)
+				return
 
 		# check if the bot has been pinged
 		if self.regex_pinged.match(msg) is not None:
 			self.send_PRIVMSG(channel, "👋 FeelsDankMan hi " + tags_dict["display-name"] + "! I'm a bot.")
 
 		# create the re.match object to be used in the if statements for the commands
-		command_regex = "(?i)^" + self.settings[channel]["trigger"] + "(?P<command>\S+)(?:\s+(?P<param>.+?))?\s*$"
+		command_regex = "(?i)^" + self.config.get(channel, "trigger") + "(?P<command>\S+)(?:\s+(?P<param>.+?))?\s*$"
 		# full_command = {"command": "", "param": ""}
 		full_command = re.match(command_regex, msg)
 
@@ -211,7 +237,7 @@ class irc_bot:
 				elif command == "test": self.send_PRIVMSG(channel, "DankG")
 				elif command == "joinchannel":
 					newchannel = "#" + param.split()[0].lower()
-					if self.join(tags, nick, user, host, cmd, channel, msg, data, newchannel):
+					if self.join(data, tags, nick, user, host, cmd, channel, msg, newchannel):
 						self.send_PRIVMSG(channel, "Joined channel " + newchannel)
 					else:
 						self.send_PRIVMSG(channel, "Already joined channel " + newchannel)
@@ -222,7 +248,7 @@ class irc_bot:
 					elif removedchannel == channel:
 						self.send_PRIVMSG(channel, "If you want me to leave this chat use the command in my chat")
 					else:
-						if self.part(tags, nick, user, host, cmd, channel, msg, data, removedchannel=removedchannel):
+						if self.part(data, tags, nick, user, host, cmd, channel, msg, removedchannel=removedchannel):
 							self.send_PRIVMSG(channel, "Left channel " + removedchannel)
 						else:
 							self.send_PRIVMSG(channel, "I'm not connected to channel " + removedchannel)
@@ -232,17 +258,19 @@ class irc_bot:
 					limit = int(params_list[1])
 					end = start + limit
 					count = 0
-					banlist_file = open("files/banlist.txt", "r")
-					for banned_user in banlist_file.readlines():
-						count +=1
-						if count < start:
-							continue
-						elif count < end:
-							self.send_PRIVMSG(channel, "/ban " + banned_user)
-						else:
-							self.send_PRIVMSG(channel, str(count))
-							break
-					banlist_file.close()
+					try:
+						with open("banlist.txt", "r") as banlist_file:
+							for banned_user in banlist_file.readlines():
+								count +=1
+								if count < start:
+									continue
+								elif count < end:
+									self.send_PRIVMSG(channel, "/ban " + banned_user)
+								else:
+									self.send_PRIVMSG(channel, str(count))
+									break
+					except IOError:
+						self.send_PRIVMSG(channel, "Can't find or access file banlist.txt")
 				elif command == "connectedchannels":
 					response = ""
 					for connected_channel in self.connected_channels:

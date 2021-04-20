@@ -27,9 +27,6 @@ for line in volpesbot.handle:
 	# remove spaces from the end of the string
 	line = line.strip()
 
-	# log data received
-	volpesbot.log(line)
-
 	# divide all the data into appropriate variables
 	matches_tuple = volpesbot.regex_message.match(line)
 	data = line
@@ -41,9 +38,12 @@ for line in volpesbot.handle:
 	channel = matches_tuple["channel"]
 	msg = matches_tuple["msg"]
 
+	# log data received
+	volpesbot.log(data, tags, nick, user, host, cmd, channel, msg)
+
 	# call the appropriate function if it exists
 	if hasattr(volpesbot, "on_" + cmd):
-		getattr(volpesbot, "on_" + cmd)(tags, nick, user, host, cmd, channel, msg, data)
+		getattr(volpesbot, "on_" + cmd)(data, tags, nick, user, host, cmd, channel, msg)
 
 	# if the program has been flagged to be closed
 	if volpesbot.ui.quit_var.get():

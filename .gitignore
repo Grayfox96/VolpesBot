@@ -115,3 +115,4 @@ dmypy.json
 
 # other files
 files/*txt
+volpesbot_config.ini

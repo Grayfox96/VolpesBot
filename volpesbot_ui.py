@@ -28,8 +28,6 @@ class ui(threading.Thread):
 
 	def on_ui_close(self):
 		if messagebox.askokcancel("Quit", "Do you want to quit?"):
-			# quit()
-			# self.root.quit()
 			self.quit_var.set(True)
 
 	def input_box_func(self, message):
