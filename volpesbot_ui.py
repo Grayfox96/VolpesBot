@@ -24,6 +24,7 @@ class ui(threading.Thread):
 
 	def __init__(self):
 		threading.Thread.__init__(self)
+		self.daemon = True
 		self.start()
 
 	def on_ui_close(self):
@@ -44,10 +45,10 @@ class ui(threading.Thread):
 		self.root.geometry("800x800")
 
 		# chat box
-		self.chat_log_text = tk.StringVar()
-		self.chat_log = tk.Label(self.root, bd=0, textvariable=self.chat_log_text, anchor="sw", justify="left", height=1)
-		self.chat_log.pack(expand=True, fill="both")
-		self.chat_log.bind("<Configure>", lambda e: self.chat_log.config(wraplength=self.chat_log.winfo_width()))
+		self.chat_box_text = tk.StringVar()
+		self.chat_box = tk.Label(self.root, bd=0, textvariable=self.chat_box_text, anchor="sw", justify="left", height=1)
+		self.chat_box.pack(expand=True, fill="both")
+		self.chat_box.bind("<Configure>", lambda e: self.chat_box.config(wraplength=self.chat_box.winfo_width()))
 
 		# entry
 		self.input_box_text = tk.StringVar()

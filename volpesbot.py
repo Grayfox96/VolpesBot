@@ -17,18 +17,18 @@
 from volpesbot_irc import *
 
 
-volpesbot = irc_bot()
+irc_bot = irc_bot()
 
-volpesbot.connect()
+irc_bot.connect()
 
 # iterate all the lines in the buffer
-for line in volpesbot.handle:
+for line in irc_bot.handle:
 
 	# remove spaces from the end of the string
 	line = line.strip()
 
 	# divide all the data into appropriate variables
-	matches_tuple = volpesbot.regex_message.match(line)
+	matches_tuple = irc_bot.regex_message.match(line)
 	data = line
 	tags = matches_tuple["tags"]
 	nick = matches_tuple["nick"]
@@ -39,18 +39,18 @@ for line in volpesbot.handle:
 	msg = matches_tuple["msg"]
 
 	# log data received
-	volpesbot.log(data, tags, nick, user, host, cmd, channel, msg)
+	irc_bot.log(data, tags, nick, user, host, cmd, channel, msg)
 
 	# call the appropriate function if it exists
-	if hasattr(volpesbot, "on_" + cmd):
-		getattr(volpesbot, "on_" + cmd)(data, tags, nick, user, host, cmd, channel, msg)
+	if hasattr(irc_bot, "on_" + cmd):
+		getattr(irc_bot, "on_" + cmd)(data, tags, nick, user, host, cmd, channel, msg)
 
 	# if the program has been flagged to be closed
-	if volpesbot.ui.quit_var.get():
+	if irc_bot.ui.quit_var.get():
 		print("Closing script")
 		# save the settings in the settings file
-		volpesbot.save_settings()
+		irc_bot.save_settings()
 		# close the ui (its running in different thread)
-		volpesbot.ui.root.quit()
+		irc_bot.ui.root.quit()
 		# close the program
 		quit()
