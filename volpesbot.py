@@ -17,7 +17,7 @@
 from volpesbot_irc import *
 
 
-irc_bot = irc_bot()
+irc_bot = IRCBot()
 
 irc_bot.connect()
 
@@ -42,15 +42,16 @@ for line in irc_bot.handle:
 	irc_bot.log(data, tags, nick, user, host, cmd, channel, msg)
 
 	# call the appropriate function if it exists
-	if hasattr(irc_bot, "on_" + cmd):
+
+	try:
 		getattr(irc_bot, "on_" + cmd)(data, tags, nick, user, host, cmd, channel, msg)
+	except AttributeError:
+		pass
 
 	# if the program has been flagged to be closed
-	if irc_bot.ui.quit_var.get():
-		print("Closing script")
-		# save the settings in the settings file
-		irc_bot.save_settings()
-		# close the ui (its running in different thread)
-		irc_bot.ui.root.quit()
-		# close the program
-		quit()
+	if irc_bot.ui.quit_var.is_set():
+		irc_bot.quit()
+	# if the program has been flagged to be restarted
+	if irc_bot.ui.restart_var.is_set():
+		irc_bot.restart()
+

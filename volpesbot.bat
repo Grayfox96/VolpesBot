@@ -1,3 +1,3 @@
 @echo off
 python volpesbot.py
-pause
+pause > nul

@@ -117,3 +117,5 @@ dmypy.json
 files/*txt
 volpesbot_config.ini
 temp.py
+volpesbot.sublime-project
+volpesbot.sublime-workspace

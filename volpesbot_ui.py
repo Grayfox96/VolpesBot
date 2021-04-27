@@ -19,17 +19,19 @@ from tkinter import messagebox
 import threading
 
 # Run tkinter code in another thread
-class ui(threading.Thread):
-	waiting_for_ui = threading.Event()
+class UI(threading.Thread):
 
 	def __init__(self):
+		self.waiting_for_ui = threading.Event()
+		self.quit_var = threading.Event()
+		self.restart_var = threading.Event()
 		threading.Thread.__init__(self)
 		self.daemon = True
 		self.start()
 
 	def on_ui_close(self):
 		if messagebox.askokcancel("Quit", "Do you want to quit?"):
-			self.quit_var.set(True)
+			self.quit_var.set()
 
 	def input_box_func(self, message):
 		self.message_out_var.set(message)
@@ -62,9 +64,6 @@ class ui(threading.Thread):
 
 		# create the variable where to put the message to send
 		self.message_out_var = tk.StringVar()
-
-		# create the variable used to flag closing the program
-		self.quit_var = tk.BooleanVar()
 
 		# unpause the main thread and start the ui loop
 		self.waiting_for_ui.set()

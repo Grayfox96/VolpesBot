@@ -14,15 +14,21 @@
 # 	You should have received a copy of the GNU General Public License
 # 	along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+import os
+import sys
 import socket
 import time
 import datetime
 import math
 import configparser
 import re
+import threading
 from volpesbot_ui import *
 
-class irc_bot:
+class IRCBot:
+
+	class AuthorizationError(Exception): pass
+
 	def __init__(self):
 		# Define the socket
 		self.irc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -55,10 +61,16 @@ class irc_bot:
 		}
 
 		# compile the regex functions
-		self.regex_message = re.compile("^@?(?P<tags>(?:[^\s=;]+=[^\s=;]*[; ])*)(?:\:(?P<nick>[^\!\@ ]+)(?:\!(?P<user>[^\@ ]+))?(?:\@(?P<host>[^ ]+))? )?(?P<cmd>[^ ]+)(?: (?P<channel>[^\:][^ ]*(?: [^\:][^ ]*)*))?(?: \:(?P<msg>.*))?$")
+		self.regex_message = re.compile("^@?(?P<tags>(?:[^\s=;]+=[^\s=;]*[; ])*)"
+										"(?:\:(?P<nick>[^\!\@ ]+)(?:\!(?P<user>[^\@ ]+))?(?:\@(?P<host>[^ ]+))? )?"
+										"(?P<cmd>[^ ]+)"
+										"(?: (?P<channel>[^\:][^ ]*(?: [^\:][^ ]*)*))?"
+										"(?: \:(?P<msg>.*))?$")
 		self.regex_pinged = re.compile("(?i)(?:\s|\A|\b)(@" + self.bot_nick + ")(?:\s|$|\b)")
+		# https://mathiasbynens.be/demo/url-regex
+		self.regex_url = re.compile("(?i)(?:\s|\A|\b)(?:(?:https?://)?(?P<url>(?:[^\s/$.?#][^\s/]*)\.[^\s]*[.]?[^\s]*))(?:\s|\A|\b)")
 		# create the ui
-		self.ui = ui()
+		self.ui = UI()
 		# wait for the ui thread to complete the startup
 		while not self.ui.waiting_for_ui.isSet():
 			print("Waiting for UI")
@@ -106,7 +118,7 @@ class irc_bot:
 		self.send_raw("USER " + self.bot_user + " 0 * :" + self.bot_name)
 
 	# passing a channel makes it connect to it, otherwise connects to all the channel in the settings
-	def join(self, data, tags, nick, user, host, cmd, channel, msg, newchannel=None):
+	def _join(self, data, tags, nick, user, host, cmd, channel, msg, newchannel=None):
 		# join the channels
 		if newchannel is None:
 			channels = ""
@@ -141,7 +153,7 @@ class irc_bot:
 				return True
 
 	# parts a channel
-	def part(self, data, tags, nick, user, host, cmd, channel, msg, removedchannel):
+	def _part(self, data, tags, nick, user, host, cmd, channel, msg, removedchannel):
 		# if connected to that channel removes it from startup
 		if removedchannel in self.session_variables["connected_channels"]:
 			print("Leaving " + removedchannel)
@@ -174,11 +186,34 @@ class irc_bot:
 		else:
 			print("Settings saved!")
 
+	def quit(self):
+		print("Closing script")
+		# save the settings in the settings file
+		self.save_settings()
+		# close the ui (its running in different thread)
+		self.ui.root.quit()
+		print("You can close this window now")
+		# close the program
+		quit()
+
+	def restart(self):
+		print("Restarting script")
+		# save the settings in the settings file
+		self.save_settings()
+		# close the ui (its running in different thread)
+		self.ui.root.quit()
+		# print some info
+		print("sys.argv was", sys.argv)
+		print("sys.executable was", sys.executable)
+		print("restart now")
+		# restart the program
+		os.execv(sys.executable, ['python'] + sys.argv)
+
 	# send anything to the irc server, accepts a string
 	def send_raw(self, message):
 		self.log(">" + message)
 		# this writes to the socket file
-		print(message, file=self.handle)
+		print(message, file=self.handle, flush=True)
 
 	# accepts a channel and a string to send directly as a privmsg
 	def send_PRIVMSG(self, channel, text):
@@ -189,7 +224,7 @@ class irc_bot:
 	# special "send_raw" case, this way the console doesnt output the password as plain text
 	def send_PASS(self, password):
 		self.log(">PASS oauth:******************************")
-		print("PASS", password, file=self.handle)
+		print("PASS", password, file=self.handle, flush=True)
 
 	# answers to a PING message with a PONG message
 	def on_PING(self, data, tags, nick, user, host, cmd, channel, msg):
@@ -212,26 +247,131 @@ class irc_bot:
 
 	# answers to a 376 message with a join message
 	def on_376(self, data, tags, nick, user, host, cmd, channel, msg):
-		self.join(data, tags, nick, user, host, cmd, channel, msg)
+		self._join(data, tags, nick, user, host, cmd, channel, msg)
 
 	def on_NOTICE(self, data, tags, nick, user, host, cmd, channel, msg):
 		self.send_PRIVMSG("#" + self.bot_nick, data)
 		pass
 
 	def on_PRIVMSG(self, data, tags, nick, user, host, cmd, channel, msg):
+
+		# command_ functions are called when the user types a command in chat
+		def command_ping():
+			uptime = math.floor(time.time() - self.session_variables["startup_time"])
+			self.send_PRIVMSG(channel, "Uptime: " + str(datetime.timedelta(seconds=uptime)))
+
+		def command_redbar():
+			if param is None:
+				self.send_PRIVMSG(channel, "When the player's Pokémon is at 5/24 or less of their max HP there will be a beeping sound and "
+										   "you are able to input during Pokémon cries, saving ~1 second every time a Pokémon enters the battle.")
+			else:
+				try:
+					max_hp = int(param.split(maxsplit=1)[0])
+					treshold = math.floor(max_hp * 5 / 24)
+					self.send_PRIVMSG(channel, f"{treshold}/{max_hp}")
+				except ValueError:
+					self.send_PRIVMSG(channel, f'Usage: {self.config.get(channel, "trigger")}redbar [integer]')
+
+		def command_gettags():
+			if user_is_mod or user_is_broadcaster or user_is_bot_owner:
+				self.send_PRIVMSG(channel, data)
+			else: raise self.AuthorizationError()
+
+		def command_connectedchannels():
+			response = "I'm connected to these channels: " + "".join([connected_channel + ", " for connected_channel in self.session_variables["connected_channels"]]).removesuffix(", ") + "."
+			self.send_PRIVMSG(channel, response)
+
+		def command_joinchannel():
+			if user_is_mod or user_is_broadcaster or user_is_bot_owner:
+				newchannel = "#" + param.split()[0].lower()
+				if self._join(data, tags, nick, user, host, cmd, channel, msg, newchannel):
+					self.send_PRIVMSG(channel, "Joined channel " + newchannel)
+				else:
+					self.send_PRIVMSG(channel, "Already joined channel " + newchannel)
+			else: raise self.AuthorizationError()
+
+		def command_partchannel():
+			if user_is_mod or user_is_broadcaster or user_is_bot_owner:
+				removedchannel = "#" + param.split()[0].lower()
+				if removedchannel == "#" + self.bot_nick:
+					self.send_PRIVMSG(channel, "I can't leave my own channel, if you don't want me to join this chat on startup edit the settings file")
+				elif removedchannel == channel:
+					self.send_PRIVMSG(channel, "If you want me to leave this chat use the command in my chat")
+				else:
+					if self._part(data, tags, nick, user, host, cmd, channel, msg, removedchannel=removedchannel):
+						self.send_PRIVMSG(channel, "Left channel " + removedchannel)
+					else:
+						self.send_PRIVMSG(channel, "I'm not connected to channel " + removedchannel)
+			else: raise self.AuthorizationError()
+
+		# alias for partchannel
+		command_leavechannel = command_partchannel
+
+		def command_banlist():
+			if user_is_mod or user_is_broadcaster or user_is_bot_owner:
+				params_list = param.split(maxsplit=2)
+				start = int(params_list[0])
+				limit = int(params_list[1])
+				end = start + limit
+				count = 0
+				try:
+					with open("banlist.txt", "r") as banlist_file:
+						for banned_user in banlist_file.readlines():
+							count +=1
+							if count < start:
+								continue
+							elif count < end:
+								self.send_PRIVMSG(channel, "/ban " + banned_user)
+							else:
+								self.send_PRIVMSG(channel, str(count))
+								break
+				except IOError:
+					self.send_PRIVMSG(channel, "Can't find or access file banlist.txt")
+			else: raise self.AuthorizationError()
+
+		def command_quit():
+			if user_is_mod or user_is_broadcaster or user_is_bot_owner:
+				self.send_PRIVMSG(channel, "Closing the bot")
+				self.ui.quit_var.set()
+			else: raise self.AuthorizationError()
+
+		def command_restart():
+			if user_is_mod or user_is_broadcaster or user_is_bot_owner:
+				self.send_PRIVMSG(channel, "Restarting the bot")
+				self.ui.restart_var.set()
+			else: raise self.AuthorizationError()
+
+		def command_newcommand(): pass
+
+		def command_temptimer():
+			if user_is_mod or user_is_broadcaster or user_is_bot_owner:
+				threading.Timer(5, self.send_PRIVMSG, args=[channel, "timer ended"]).start()
+			else: raise self.AuthorizationError()
+
+
 		# create a dictionary for the tags
-		tags_dict = {}
-		for tag in tags.split(";"):
-			tag_split = tag.split("=")
-			tags_dict[tag_split[0]] = tag_split[1]
+		tags_dict = {tag.split("=")[0]: tag.split("=")[1] for tag in tags.split(";")}
+
+		# check if the user has special permissions
+		user_is_bot_owner = True if nick == self.bot_owner else False
+		user_is_broadcaster = True if "broadcaster" in tags_dict["badges"] else False
+		user_is_mod = True if "moderator" in tags_dict["badges"] else False
+		user_is_vip = True if "vip" in tags_dict["badges"] else False
 
 		# check if the bot is setup to delete messages
 		if self.config.has_option(channel, "banned_phrases"):
 			# check if a banned string is in the message
-			if re.search("(?i)" + self.config.get(channel, "banned_phrases"), msg) is not None:
+			if re.search("(?i)" + self.config.get(channel, "banned_phrases"), msg) is not None and not (user_is_broadcaster or user_is_mod):
 				self.send_PRIVMSG(channel, "/delete " + tags_dict["id"])
 				print("Message deleted from user " + user + ", message content: " + msg)
 				return
+
+		if self.config.has_option(channel, "block_urls") and self.config.getboolean(channel, "block_urls") and not (user_is_broadcaster or user_is_mod or user_is_vip):
+				if self.regex_url.search(msg) is not None:
+					self.send_PRIVMSG(channel, "/delete " + tags_dict["id"])
+					self.send_PRIVMSG(channel, "grayfoxWeirdDude no urls")
+					print("Message deleted from user " + user + ", message content: " + msg)
+					return
 
 		# check if the bot is setup to copy specific emotes
 		if self.config.has_option(channel, "mime_emotes"):
@@ -243,71 +383,26 @@ class irc_bot:
 					self.session_variables[channel]["last_mime_emote"] = tags_dict["tmi-sent-ts"]
 					self.send_PRIVMSG(channel, mime_emotes_result["emote"])
 
-
-
 		# check if the bot has been pinged
 		if self.regex_pinged.search(msg) is not None:
 			self.send_PRIVMSG(channel, "👋 FeelsDankMan hi " + tags_dict["display-name"] + "! I'm a bot.")
 
 		# create the re.match object to be used in the if statements for the commands
-		command_regex = "(?i)^" + self.config.get(channel, "trigger") + "(?P<command>\S+)(?:\s+(?P<param>.+?))?\s*$"
+		command_regex = "^" + self.config.get(channel, "trigger") + "(?P<command>\S+)(?:\s+(?P<param>.+?))?\s*$"
 		# full_command = {"command": "", "param": ""}
-		full_command = re.match(command_regex, msg)
+		full_command = re.match(command_regex, msg, flags=re.IGNORECASE)
 
 		# commands
 		if full_command is not None:
 			command = full_command["command"]
 			param = full_command["param"]
-			if nick == self.bot_owner:
-				if command == "gettags": self.send_PRIVMSG(channel, data)
-				elif command == "ping":
-					uptime = math.floor(time.time() - self.session_variables["startup_time"])
-					self.send_PRIVMSG(channel, "Uptime: " + str(datetime.timedelta(seconds=uptime)))
-				elif command == "test": self.send_PRIVMSG(channel, "DankG")
-				elif command == "joinchannel":
-					newchannel = "#" + param.split()[0].lower()
-					if self.join(data, tags, nick, user, host, cmd, channel, msg, newchannel):
-						self.send_PRIVMSG(channel, "Joined channel " + newchannel)
-					else:
-						self.send_PRIVMSG(channel, "Already joined channel " + newchannel)
-				elif command == "partchannel" or command == "leavechannel":
-					removedchannel = "#" + param.split()[0].lower()
-					if removedchannel == "#" + self.bot_nick:
-						self.send_PRIVMSG(channel, "I can't leave my own channel, if you don't want me to join this chat on startup edit the settings file")
-					elif removedchannel == channel:
-						self.send_PRIVMSG(channel, "If you want me to leave this chat use the command in my chat")
-					else:
-						if self.part(data, tags, nick, user, host, cmd, channel, msg, removedchannel=removedchannel):
-							self.send_PRIVMSG(channel, "Left channel " + removedchannel)
-						else:
-							self.send_PRIVMSG(channel, "I'm not connected to channel " + removedchannel)
-				elif command == "banlist":
-					params_list = param.split(maxsplit=2)
-					start = int(params_list[0])
-					limit = int(params_list[1])
-					end = start + limit
-					count = 0
-					try:
-						with open("banlist.txt", "r") as banlist_file:
-							for banned_user in banlist_file.readlines():
-								count +=1
-								if count < start:
-									continue
-								elif count < end:
-									self.send_PRIVMSG(channel, "/ban " + banned_user)
-								else:
-									self.send_PRIVMSG(channel, str(count))
-									break
-					except IOError:
-						self.send_PRIVMSG(channel, "Can't find or access file banlist.txt")
-				elif command == "connectedchannels":
-					response = ""
-					for connected_channel in self.session_variables["connected_channels"]:
-						response = response + connected_channel + ", "
-					response = "I'm connected to these channels: " + response.removesuffix(", ")
-					self.send_PRIVMSG(channel, response)
-				elif command == "quit":
-					self.send_PRIVMSG(channel, "Closing script")
-					self.ui.quit_var.set(True)
-				elif command == "newcommand": pass
-			elif command: self.send_PRIVMSG(channel, "grayfoxWeirdDude frick off")
+			try:
+				print(command)
+				print(param)
+				locals()["command_" + command]()
+			except KeyError:
+				print("KeyError")
+			except self.AuthorizationError:
+				print("AuthorizationError")
+				self.send_PRIVMSG(channel, "grayfoxWeirdDude you cant use that command")
+
