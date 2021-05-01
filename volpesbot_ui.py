@@ -17,21 +17,24 @@
 import tkinter as tk
 from tkinter import messagebox
 import threading
+import datetime
 
 # Run tkinter code in another thread
 class UI(threading.Thread):
 
 	def __init__(self):
-		self.waiting_for_ui = threading.Event()
+		self.ui_ready = threading.Event()
 		self.quit_var = threading.Event()
 		self.restart_var = threading.Event()
 		threading.Thread.__init__(self)
-		self.daemon = True
 		self.start()
 
 	def on_ui_close(self):
 		if messagebox.askokcancel("Quit", "Do you want to quit?"):
-			self.quit_var.set()
+			if threading.main_thread().is_alive():
+				self.quit_var.set()
+			else:
+				self.root.destroy()
 
 	def input_box_func(self, message):
 		self.message_out_var.set(message)
@@ -42,15 +45,32 @@ class UI(threading.Thread):
 		self.root = tk.Tk()
 		# execute a function when the window is closed
 		self.root.protocol("WM_DELETE_WINDOW", self.on_ui_close)
-		self.root.title("VolpesBot\n")
+		self.root.title("VolpesBot")
 		self.root.iconbitmap("files/VolpesBotTwitch.ico")
 		self.root.geometry("800x800")
 
+		# chat box canvas
+		self.chat_box_canvas = tk.Canvas(self.root)
+		self.chat_box_canvas.pack(expand=True, fill="both")
+
 		# chat box
-		self.chat_box_text = tk.StringVar()
-		self.chat_box = tk.Label(self.root, bd=0, textvariable=self.chat_box_text, anchor="sw", justify="left", height=1)
-		self.chat_box.pack(expand=True, fill="both")
-		self.chat_box.bind("<Configure>", lambda e: self.chat_box.config(wraplength=self.chat_box.winfo_width()))
+		self.chat_box = tk.Text(self.chat_box_canvas, state="disabled", wrap="word")
+		self.chat_box.pack(expand=True, fill="both", side="left")
+
+		# chat box scrollbar
+		self.chat_box_scrollbar = tk.Scrollbar(self.chat_box_canvas, orient = "vertical", command = self.chat_box.yview)
+		self.chat_box_scrollbar.pack(fill="y", anchor="e", side="right")
+
+		# connect the chat box movement to the scrollbar
+		self.chat_box.configure(yscrollcommand=self.chat_box_scrollbar.set)
+
+		# add tag objects to the chat box
+		self.chat_box.tag_configure("gray", foreground="#888888")
+		self.chat_box.tag_configure("underline", underline=True)
+		self.chat_box.tag_configure("black", foreground="#000000")
+		self.chat_box.tag_configure("warning", foreground="#ff3333")
+		self.chat_box.tag_configure("blue", foreground="#3333ff")
+		self.chat_box.tag_configure("wrap_char", wrap="char")
 
 		# entry
 		self.input_box_text = tk.StringVar()
@@ -58,13 +78,52 @@ class UI(threading.Thread):
 		self.input_box.pack(expand=True, fill="x", anchor="sw", side="left")
 		self.input_box.bind("<Return>", lambda e: self.input_box_func(self.input_box_text.get()))
 
-		# button
+		# send button
 		self.send_button = tk.Button(self.root, width=10, text="Send", command= lambda: self.input_box_func(self.input_box_text.get()))
 		self.send_button.pack(anchor="se", side="right")
 
-		# create the variable where to put the message to send
+		# create the variable where to store the message to send
 		self.message_out_var = tk.StringVar()
 
 		# unpause the main thread and start the ui loop
-		self.waiting_for_ui.set()
+		self.ui_ready.set()
 		self.root.mainloop()
+
+	def print_PRIVMSG(self, channel, nick, message, nick_color="#000000"):
+
+		# add some padding around the text
+		nick = " " + nick + ": "
+
+		# if the tag for the specific nick color doesnt exist create one
+		if nick_color in self.chat_box.tag_names():
+			pass
+		else:
+			self.chat_box.tag_configure(nick_color, foreground=nick_color)
+
+		self._print(channel, "underline", nick, nick_color, f"{message}\n", "black")
+
+
+	def print_warning(self, message):
+		self._print(message + "\n", "warning")
+
+
+	def print_info(self, message):
+		self._print(message + "\n", "blue")
+
+
+	def print_NOTICE(self, channel, message):
+		self._print(channel , ("black", "underline") , f"{message}\n", "blue")
+
+
+	def print_log(self, message):
+		self._print(f"{message}\n", ("gray", "wrap_char"))
+
+
+	def _print(self, *args):
+		# get the formatted time and make some padding around the text
+		current_time = datetime.datetime.now().strftime("%H:%M:%S") + " "
+
+		self.chat_box.config(state="normal")
+		self.chat_box.insert("end", current_time, "gray", *args)
+		self.chat_box.config(state="disabled")
+		self.chat_box.see("end")

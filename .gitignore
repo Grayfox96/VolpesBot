@@ -119,3 +119,6 @@ volpesbot_config.ini
 temp.py
 volpesbot.sublime-project
 volpesbot.sublime-workspace
+banlist.txt
+error_log.txt
+VolpesBot.lnk
