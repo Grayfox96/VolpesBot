@@ -46,12 +46,12 @@ for line in irc_bot.handle:
 		if cmd not in ("CAP", "001", "002", "003", "004", "375", "372", "353", "366", "USERSTATE", "ROOMSTATE", "HOSTTARGET"):
 			getattr(irc_bot, "on_" + cmd)(data, tags, nick, user, host, cmd, channel, msg)
 	except AttributeError as error:
-		irc_bot.ui.print_info(f"Handled AttributeError: {error}")
+		irc_bot.log(f"Handled AttributeError: {error}")
 	except ConnectionResetError as error:
-		irc_bot.print_info(f"ConnectionResetError: {error}")
+		irc_bot.log(f"Handled ConnectionResetError: {error}", cmd="warning")
 		irc_bot.ui.restart_var.set()
 	except ConnectionAbortedError as error:
-		irc_bot.print_info(f"ConnectionResetError: {error}")
+		irc_bot.log(f"Handled ConnectionResetError: {error}", cmd="warning")
 		irc_bot.ui.restart_var.set()
 
 	# if the program has been flagged to be closed

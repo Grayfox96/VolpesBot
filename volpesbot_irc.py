@@ -83,7 +83,7 @@ class IRCBot:
 		while not self.ui.ui_ready.isSet():
 			print("Waiting for UI")
 			self.ui.ui_ready.wait(2)
-		self.log("UI open")
+		print("UI open")
 
 		# set an observer for the input box variable
 		self.ui.message_out_var.trace("w", lambda a, b, c: self.send_raw(self.ui.message_out_var.get()))
@@ -116,7 +116,7 @@ class IRCBot:
 	# connects to the server address and sends all the messages needed to connect to irc
 	def connect(self):
 		# Connect to the server
-		self.log(f"Connecting to: {self.server}")
+		self.log(f"Connecting to: {self.server}", cmd="info")
 		self.irc.connect((self.server, self.port))
 		# Perform user authentication
 		self.send_raw("CAP REQ :twitch.tv/tags twitch.tv/commands")
@@ -137,7 +137,7 @@ class IRCBot:
 					channels = channels + newchannel + ","
 			channels = channels.removesuffix(",")
 			self.send_raw(f"JOIN {channels}")
-			self.ui.print_info(f"Connected to {channels}")
+			self.log(f"Connected to {channels}", cmd="info")
 		else:
 			# if the channel is in the settings
 			if self.config.has_section(newchannel):
@@ -146,7 +146,7 @@ class IRCBot:
 					return False
 				# if not connected makes it connect on startup
 				else:
-					self.log(f"Joining {newchannel}")
+					self.log(f"Joining {newchannel}", cmd="info")
 					self.config.set(newchannel, "connect_on_startup", "yes")
 					self.session_variables["connected_channels"].append(newchannel)
 					self.send_raw(f"JOIN {newchannel}")
@@ -165,7 +165,7 @@ class IRCBot:
 	def _part(self, data, tags, nick, user, host, cmd, channel, msg, removedchannel):
 		# if connected to that channel removes it from startup
 		if removedchannel in self.session_variables["connected_channels"]:
-			self.log(f"Leaving {removedchannel}")
+			self.log(f"Parting {removedchannel}", cmd="info")
 			self.session_variables["connected_channels"].remove(removedchannel)
 			self.config.set(removedchannel, "connect_on_startup", "no")
 			self.send_raw(f"PART {removedchannel}")
@@ -177,16 +177,26 @@ class IRCBot:
 	# outputs to the log
 	def log(self, data, tags="", nick="", user="", host="", cmd="", channel="", msg=""):
 
-		# print everything to the ui
+		# print everything to the ui only if verbose log is active
 		if self.config.getboolean("DEFAULT", "verbose_log"):
-				self.ui.print_log(data)
+			self.ui.print_log(data)
 
-		# get PRIVMSG messages and send them to the UI
+		# these cmds are always printed with specific formatting
 		if cmd == "PRIVMSG":
+			# get the nick color from the tags
 			nick_color = "".join([tag.split("=")[1] for tag in tags.split(";") if tag.split("=")[0] == "color"])
 			self.ui.print_PRIVMSG(channel, nick, msg, nick_color)
+		elif cmd == "WHISPER":
+			nick_color = "".join([tag.split("=")[1] for tag in tags.split(";") if tag.split("=")[0] == "color"])
+			self.ui.print_WHISPER(nick, msg, nick_color)
 		elif cmd == "NOTICE":
 			self.ui.print_NOTICE(channel, msg)
+		# not an actual IRC command, used internally to print these messages in a different style
+		elif cmd == "warning":
+			self.ui.print_warning(data)
+		# a real irc command but not supported by twitch, used internally to print these messages in a different style
+		elif cmd == "info":
+			self.ui.print_info(data)
 
 
 	# saves the setting in the settings file
@@ -195,24 +205,24 @@ class IRCBot:
 			with open("volpesbot_config.ini", "w") as settings_file:
 				self.config.write(settings_file)
 		except IOError:
-			self.log("Unable to save settings!")
+			self.log("IOError: Unable to save settings!", cmd="warning")
 		else:
-			self.log("Settings saved!")
+			self.log("Settings saved!", cmd="info")
 
 
 	def quit(self):
-		self.log("Closing script")
+		print("Closing script")
 		# save the settings in the settings file
 		self.save_settings()
 		# close the ui (its running in different thread)
 		self.ui.root.quit()
-		self.log("You can now close this window")
+		print("You can now close this window")
 		# close the program
 		quit()
 
 
 	def restart(self):
-		self.log("Restarting script")
+		print("Restarting script")
 		# save the settings in the settings file
 		self.save_settings()
 		# close the ui (its running in different thread)
@@ -236,10 +246,11 @@ class IRCBot:
 			# PRIVMSG #volpesbot :test
 			# PONG :tmi.twitch.tv
 		matches_tuple = re.match(send_raw_regex, message)
-		self.log(message, nick=self.bot_nick, cmd=matches_tuple["command"], channel=matches_tuple["channel"],
-			msg=matches_tuple["msg"], tags="color=#B22222;display-name=VolpesBot")
-		# this writes to the socket file
-		print(message, file=self.handle, flush=True)
+		if matches_tuple is not None:
+			self.log(message, nick=self.bot_nick, cmd=matches_tuple["command"], channel=matches_tuple["channel"],
+				msg=matches_tuple["msg"], tags="color=#B22222;display-name=VolpesBot")
+			# this writes to the socket file if the message is valid
+			print(message, file=self.handle, flush=True)
 
 
 	# accepts a channel and a string to send directly as a privmsg
@@ -286,6 +297,11 @@ class IRCBot:
 
 	def on_PRIVMSG(self, data, tags, nick, user, host, cmd, channel, msg):
 
+		def user_not_authorized():
+			self.log(f"User {nick}(owner: {user_is_bot_owner}, broadcaster: {user_is_broadcaster}, "
+				f"mod: {user_is_mod}, vip: {user_is_vip}) used command \"{command}\"", cmd="warning")
+			self.send_PRIVMSG(channel, "grayfoxWeirdDude you cant use that command")
+
 		# command_ functions are called when the user types a command in chat
 		def command_ping():
 			uptime = str(datetime.timedelta(seconds = math.floor(time.time() - self.session_variables["startup_time"])))
@@ -306,12 +322,10 @@ class IRCBot:
 		def command_gettags():
 			if user_is_mod or user_is_broadcaster or user_is_bot_owner:
 				self.send_PRIVMSG(channel, data)
-			else: raise self.AuthorizationError()
+			else: user_not_authorized()
 
 		def command_connectedchannels():
-			response = "I'm connected to these channels: " + "".join([connected_channel + ", " 
-																	for connected_channel in self.session_variables["connected_channels"]
-																	]).removesuffix(", ") + "."
+			response = "I'm connected to these channels: " + ", ".join(self.session_variables["connected_channels"]) + "."
 			self.send_PRIVMSG(channel, response)
 
 		def command_joinchannel():
@@ -321,7 +335,7 @@ class IRCBot:
 					self.send_PRIVMSG(channel, "Joined channel " + newchannel)
 				else:
 					self.send_PRIVMSG(channel, "Already joined channel " + newchannel)
-			else: raise self.AuthorizationError()
+			else: user_not_authorized()
 
 		def command_partchannel():
 			if user_is_mod or user_is_broadcaster or user_is_bot_owner:
@@ -335,7 +349,7 @@ class IRCBot:
 						self.send_PRIVMSG(channel, "Left channel " + removedchannel)
 					else:
 						self.send_PRIVMSG(channel, "I'm not connected to channel " + removedchannel)
-			else: raise self.AuthorizationError()
+			else: user_not_authorized()
 
 		# alias for partchannel
 		command_leavechannel = command_partchannel
@@ -349,7 +363,7 @@ class IRCBot:
 						filename = params_list[2] if len(params_list) == 3 else "banlist.txt"
 					self.send_PRIVMSG(channel, f"Banning {limit} users starting at line {start} from file {filename}")
 				except (AttributeError, ValueError) as error:
-					self.log(error)
+					self.log(f"Handled AttributeError or ValueError): {error}")
 					self.send_PRIVMSG(channel, f"Usage: {self.config.get(channel, 'trigger')}{command} start amount [filename]")
 				else:
 					end = start + limit
@@ -367,19 +381,19 @@ class IRCBot:
 						self.log(f"Handled IndexError: {error}")
 						self.send_PRIVMSG(channel, f"Reached end of {filename}")
 				self.send_PRIVMSG(channel, f"Done banning {limit} users starting at line {start} from file {filename}")
-			else: raise self.AuthorizationError()
+			else: user_not_authorized()
 
 		def command_quit():
 			if user_is_mod or user_is_broadcaster or user_is_bot_owner:
 				self.send_PRIVMSG(channel, "Closing the bot")
 				self.ui.quit_var.set()
-			else: raise self.AuthorizationError()
+			else: user_not_authorized()
 
 		def command_restart():
 			if user_is_mod or user_is_broadcaster or user_is_bot_owner:
 				self.send_PRIVMSG(channel, "Restarting the bot")
 				self.ui.restart_var.set()
-			else: raise self.AuthorizationError()
+			else: user_not_authorized()
 
 		# alias for restart
 		command_reload = command_restart
@@ -389,10 +403,10 @@ class IRCBot:
 		def command_temptimer():
 			if user_is_mod or user_is_broadcaster or user_is_bot_owner:
 				threading.Timer(5, self.send_PRIVMSG, args=[channel, "timer ended"]).start()
-			else: raise self.AuthorizationError()
+			else: user_not_authorized()
 
 		def command_error():
-			raise self.AuthorizationError()
+			user_not_authorized()
 
 
 		# create a dictionary for the tags
@@ -409,7 +423,7 @@ class IRCBot:
 				if self.regex_url.search(msg) is not None:
 					self.send_PRIVMSG(channel, "/delete " + tags_dict["id"])
 					self.send_PRIVMSG(channel, "grayfoxWeirdDude no urls")
-					self.log(f"Message deleted from user {user}, message content: {msg}")
+					self.log(f"Message deleted from user {user}, message content: {msg}", cmd="info")
 					return
 
 		# check if the bot is setup to delete messages
@@ -417,7 +431,7 @@ class IRCBot:
 			# check if a banned string is in the message
 			if re.search("(?i)" + self.config.get(channel, "banned_phrases"), msg) is not None and not (user_is_broadcaster or user_is_mod):
 				self.send_PRIVMSG(channel, "/delete " + tags_dict["id"])
-				self.log(f"Message deleted from user {user}, message content: {msg}")
+				self.log(f"Message deleted from user {user}, message content: {msg}", cmd="info")
 				return
 
 		# check if the bot is setup to copy specific emotes
@@ -444,8 +458,5 @@ class IRCBot:
 			param = full_command["param"]
 			try:
 				threading.Thread(target=locals()["command_" + command], name=command, daemon=True).start()
-			except KeyError:
-				self.log(f"KeyError: The command {command} doesnt exist")
-			except self.AuthorizationError:
-				self.log(f"AuthorizationError: user {nick} used command {command}")
-				self.send_PRIVMSG(channel, "grayfoxWeirdDude you cant use that command")
+			except KeyError as error:
+				self.log(f"Handled KeyError: The command {command} doesnt exist")
